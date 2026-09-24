@@ -1,0 +1,205 @@
+{% load static %}
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Smart Bin Dashboard</title>
+  <link rel="stylesheet" href="{% static 'css/styles.css' %}">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <!-- Fullscreen plugin CSS (v4.0.0) -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.fullscreen/4.0.0/Control.FullScreen.min.css" />
+</head>
+<body>
+  <header>
+    <div id="full-alert" style="
+      display: none;
+      background: #ffdddd;
+      color: #900;
+      padding: 10px;
+      text-align: center;
+      font-weight: bold;
+    ">
+      ⚠️ One or more bins are over 90% full!
+    </div>
+
+    <h1>Smart Bin System</h1>
+    <nav>
+      <a href="{% url 'logout' %}" class="logout-btn">Logout</a>
+    </nav>
+  </header>
+
+  <main>
+    <section>
+      <h2>Hey 👋</h2>
+      <p>this is how the bins are doing.</p>
+    </section>
+
+    <section>
+      <h3>Map with Bin Locations</h3>
+      
+      <div id="map" style="width:100%; height:400px; border-radius:8px; margin-bottom:20px;"></div>
+    </section>
+
+    <section class="bin-table" style="margin-top:30px;">
+      <h3>Bin Overview Table</h3>
+      <table border="1" cellspacing="0" cellpadding="8">
+        <thead>
+          <tr>
+            <th>Bin ID</th>
+            <th>Location</th>
+            <th>Fill %</th>
+            <th>Last Updated</th>
+          </tr>
+        </thead>
+        <tbody>
+        </tbody>
+      </table>
+    </section>
+  </main>
+
+  <!-- Leaflet JS -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <!-- Fullscreen-->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.fullscreen/4.0.0/Control.FullScreen.min.js"></script>
+
+  <script>
+  document.addEventListener('DOMContentLoaded', () => {
+    // 1) Initialize map with fullscreen control
+    const centerLat = 21.59277, centerLng = 39.14545;
+    const map = L.map('map', {
+      fullscreenControl: true,
+      fullscreenControlOptions: { position: 'topright' }
+    }).setView([centerLat, centerLng], 16);
+
+    // 2) Load tiles
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© OpenStreetMap'
+    }).addTo(map);
+
+    // 3) Hard-coded “You are here” marker
+    const youIcon = L.icon({
+      iconUrl: 'https://cdn-icons-png.flaticon.com/512/684/684908.png',
+      iconSize: [25, 25],
+      iconAnchor: [12, 25],
+      popupAnchor: [0, -25]
+    });
+    L.marker([centerLat, centerLng], { icon: youIcon })
+      .addTo(map)
+      .bindPopup('📍 You are here: Arab Open University, Jeddah')
+      .openPopup();
+
+    // 4) Bin icons & constants
+    const maxHeight   = 20; // cm
+    const ICON_RED    = "{% static 'images/bin-icon-Red.PNG' %}";
+    const ICON_ORANGE = "{% static 'images/bin-icon-Orange.PNG' %}";
+    const ICON_GREEN  = "{% static 'images/bin-icon.png' %}";
+
+    // 5) Fetch & render bins
+    async function loadBins() {
+      try {
+        let res  = await fetch('/api/bins/');
+        let bins = await res.json();
+
+        bins.forEach(bin => {
+          if (bin.bin_id === 'BIN001') {
+            bin.lat = centerLat;
+            bin.lon = centerLng;
+            bin.location = 'Arab Open University';
+          }
+        });
+
+        bins = bins.filter(b => !(b.lat === 0 && b.lon === 0));
+
+        // demo entries
+        bins.push(
+          { bin_id:'DEMO_20%', lat:21.5900, lon:39.1400, distance: maxHeight * 0.80, timestamp:'demo', location:'Rabiah street' },
+          { bin_id:'DEMO_60%', lat:21.5950, lon:39.1500, distance: maxHeight * 0.40, timestamp:'demo', location:'Qurish street' }
+        );
+
+        // clear only bin markers 
+        map.eachLayer(layer => {
+          if (layer instanceof L.Marker && layer.getPopup().getContent().includes('BIN')) {
+            map.removeLayer(layer);
+          }
+        });
+
+        const tbody = document.querySelector('.bin-table tbody');
+        tbody.innerHTML = '';
+
+        let anyFull = false;
+        bins.forEach(bin => {
+          let pct = ((maxHeight - bin.distance) / maxHeight) * 100;
+          pct = Math.max(0, Math.min(pct, 100));
+          if (pct > 60) anyFull = true;
+
+          const icon = L.icon({
+            iconUrl: pct >= 65 ? ICON_RED
+                    : pct >= 40 ? ICON_ORANGE
+                                : ICON_GREEN,
+            iconSize: [30,30],
+            iconAnchor: [15,30],
+            popupAnchor: [0,-30]
+          });
+
+          L.marker([bin.lat, bin.lon], { icon })
+            .addTo(map)
+            .bindPopup(`
+              <strong>${bin.bin_id}</strong><br>
+              ${pct.toFixed(1)}% full<br>
+              <a href="https://www.google.com/maps?q=${bin.lat},${bin.lon}" target="_blank">
+                📍 Open in Google Maps
+              </a>
+            `);
+
+          tbody.insertAdjacentHTML('beforeend', `
+            <tr>
+              <td>${bin.bin_id}</td>
+              <td>${bin.location}</td>
+              <td>${pct.toFixed(1)}%</td>
+              <td>${bin.timestamp}</td>
+            </tr>`);
+        });
+
+        document.getElementById('full-alert').style.display = anyFull ? 'block' : 'none';
+      } catch(err) {
+        console.error('Error loading bins:', err);
+      }
+    }
+
+    // 6) asking the sensor for fill level
+    let emptyDist = null;
+    async function fetchSensorData() {
+      try {
+        const r    = await fetch('/api/sensor/');
+        const data = await r.json();
+        const raw  = parseFloat(data.distance);
+
+        if (isNaN(raw) || raw <= 0) {
+          document.getElementById('fill').innerText  = 'No data yet';
+          document.getElementById('debug').innerText = '';
+          return;
+        }
+
+        emptyDist = emptyDist === null ? raw : emptyDist;
+        const dist = Math.min(raw, emptyDist);
+
+        let pct = (1 - dist/emptyDist) * 100;
+        pct = Math.max(0, Math.min(pct, 100));
+        document.getElementById('fill').innerText  = pct.toFixed(1) + '% full';
+        document.getElementById('fill').style.color = pct > 90 ? 'red' : 'green';
+        document.getElementById('debug').innerText  = `Distance: ${raw.toFixed(1)} cm`;
+      } catch(e) {
+        console.error('Error fetching sensor data:', e);
+        document.getElementById('fill').innerText = 'Error';
+      }
+    }
+
+    // 7) Start everything
+    loadBins();                setInterval(loadBins, 5000);
+    fetchSensorData();         setInterval(fetchSensorData, 3000);
+  });
+  </script>
+</body>
+</html>
